@@ -1,4 +1,4 @@
-name: NetworkSecurity CI/CD
+name: workflow
 
 on:
   push:
@@ -6,24 +6,18 @@ on:
       - main
     paths-ignore:
       - "README.md"
-  workflow_dispatch:
 
 permissions:
+  id-token: write
   contents: read
-
-env:
-  AWS_REGION: eu-north-1
-  ECR_REPOSITORY: simple-docker-service-0a0ffa21fa03
-  ECR_REGISTRY: 112188881325.dkr.ecr.eu-north-1.amazonaws.com
 
 jobs:
   integration:
     name: Continuous Integration
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Lint code
         run: echo "Linting repository"
@@ -35,71 +29,68 @@ jobs:
     name: Continuous Delivery
     needs: integration
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
+      - name: Install Utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq unzip
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Build Docker Image
-        run: |
-          docker build \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA \
-            .
-
-      - name: Push Docker Image
-        run: |
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA
-
-  Continuous-Deployment:
-    name: Deploy to EC2
-    needs: build-and-push-ecr-image
-    runs-on: [self-hosted, linux, x64]
-
-    steps:
-      - name: Verify EC2 IAM role
-        run: aws sts get-caller-identity
-
-      - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region $AWS_REGION | \
-          docker login --username AWS --password-stdin $ECR_REGISTRY
-
-      - name: Pull latest Docker image
-        run: |
-          docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA
-
-      - name: Stop and remove previous container
-        run: |
-          docker rm -f networksecurity || true
-      - name: Run Docker Image
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
         env:
-          MONGODB_URL_KEY: ${{ secrets.MONGODB_URL_KEY }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+          IMAGE_TAG: latest
         run: |
-          docker run -d \
-          --restart unless-stopped \
-          --name networksecurity \
-          -p 8080:8000 \
-          -e MONGODB_URL_KEY \
-          -e AWS_REGION \
-          -e AWS_DEFAULT_REGION="$AWS_REGION" \
-          $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA
+          # Build a docker container and
+          # push it to ECR so that it can
+          # be deployed to ECS.
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-      - name: Check container status
-        run: |
-          docker ps --filter name=networksecurity
-          docker logs --tail 30 networksecurity
+  # Continuous-Deployment:
+  #   needs: build-and-push-ecr-image
+  #   runs-on: self-hosted
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v3
 
-      - name: Clean unused Docker images
-        run: docker image prune -f
+  #     - name: Configure AWS credentials
+  #       uses: aws-actions/configure-aws-credentials@v1
+  #       with:
+  #         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  #         aws-region: ${{ secrets.AWS_REGION }}
+
+  #     - name: Login to Amazon ECR
+  #       id: login-ecr
+  #       uses: aws-actions/amazon-ecr-login@v1
+
+  #     - name: Pull latest images
+  #       run: |
+  #         docker pull ${{secrets.AWS_ECR_LOGIN_URI}}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
+
+  #     #- name: Stop and remove  container if running
+  #     # run: |
+  #     # docker ps -q --filter "name=networksecurity" | grep -q . && docker stop networksecurity && docker rm -fv networksecurity
+
+  #     - name: Run Docker Image to serve users
+  #       run: |
+  #         docker run -d -p 8080:8080 --ipc="host" --name=networksecurity -e 'AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}' -e 'AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}' -e 'AWS_REGION=${{ secrets.AWS_REGION }}'  ${{secrets.AWS_ECR_LOGIN_URI}}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
+  #     - name: Clean previous images and containers
+  #       run: |
+  #         docker system prune -f
