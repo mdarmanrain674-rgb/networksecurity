@@ -83,15 +83,18 @@ jobs:
       - name: Stop and remove previous container
         run: |
           docker rm -f networksecurity || true
-
       - name: Run Docker Image
+        env:
+          MONGODB_URL_KEY: ${{ secrets.MONGODB_URL_KEY }}
         run: |
           docker run -d \
-            --restart unless-stopped \
-            --name networksecurity \
-            -p 8080:8000 \
-            --env-file /home/ec2-user/networksecurity.env \
-            $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA
+          --restart unless-stopped \
+          --name networksecurity \
+          -p 8080:8000 \
+          -e MONGODB_URL_KEY \
+          -e AWS_REGION \
+          -e AWS_DEFAULT_REGION="$AWS_REGION" \
+          $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA
 
       - name: Check container status
         run: |
