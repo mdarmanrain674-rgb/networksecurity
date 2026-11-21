@@ -169,7 +169,7 @@ class ModelTrainer:
                 train_arr[:, :-1],
                 train_arr[:, -1],
                 test_arr[:, :-1],
-                test_arr[:, -1],
+                test_arr[:, -1], 
             )
 
             model_trainer_artifact=self.train_model(x_train,y_train,x_test,y_test)
